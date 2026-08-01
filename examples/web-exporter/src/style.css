@@ -1,0 +1,91 @@
+:root {
+  color: #14201a;
+  background:
+    radial-gradient(circle at 10% 10%, #d9f2e3 0%, transparent 40%),
+    radial-gradient(circle at 90% 0%, #f3e7c7 0%, transparent 35%),
+    linear-gradient(160deg, #f7f3ea, #e7eee8 55%, #dfe8e2);
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  line-height: 1.45;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+.layout {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 3rem;
+}
+
+header h1 {
+  font-family: "IBM Plex Serif", Georgia, serif;
+  font-size: clamp(2rem, 5vw, 2.8rem);
+  margin: 0 0 0.35rem;
+  letter-spacing: -0.03em;
+}
+
+header p,
+.meta {
+  color: #3d4f45;
+  margin: 0.25rem 0 1rem;
+}
+
+.form,
+.player {
+  display: grid;
+  gap: 0.85rem;
+}
+
+label {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+textarea,
+input[type="number"],
+input[type="file"] {
+  font: inherit;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid #8aa193;
+  background: rgba(255, 255, 255, 0.72);
+  color: inherit;
+}
+
+textarea {
+  resize: vertical;
+  min-height: 10rem;
+}
+
+button {
+  font: inherit;
+  font-weight: 650;
+  border: 0;
+  padding: 0.8rem 1rem;
+  background: #1f6b4a;
+  color: #f4fff8;
+  cursor: pointer;
+  width: fit-content;
+}
+
+button:hover {
+  background: #17553a;
+}
+
+canvas {
+  width: min(100%, 480px);
+  height: auto;
+  background: #fff;
+  justify-self: center;
+}
+
+.hidden {
+  display: none;
+}

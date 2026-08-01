@@ -1,7 +1,12 @@
 import md5 from "md5";
 import { Buffer } from "buffer";
-import { cutAndPad, xor } from "./Buffer";
-import { MAX_NONCE, FOUNTAIN_V1 } from "./constants";
+import { cutAndPad, xor, toBuffer, concatBuffers } from "./Buffer";
+import {
+  MAX_NONCE,
+  FOUNTAIN_V1,
+  MAX_FOUNTAIN_DEGREE,
+  FOUNTAIN_HEADROOM,
+} from "./constants";
 
 export function makeFountainFrame(
   dataChunks: Buffer[],
@@ -18,7 +23,7 @@ export function makeFountainFrame(
     head.writeUInt16BE(frameIndex, 3 + 2 * j);
   }
   const data = xor(selectedFramesData);
-  return Buffer.concat([head, data]).toString("base64");
+  return concatBuffers([head, data]).toString("base64");
 }
 
 export function makeDataFrame({
@@ -36,14 +41,70 @@ export function makeDataFrame({
   head.writeUInt8(nonce, 0);
   head.writeUInt16BE(totalFrames, 1);
   head.writeUInt16BE(frameIndex, 3);
-  return Buffer.concat([head, data]).toString("base64");
+  return concatBuffers([head, data]).toString("base64");
 }
 
 export function wrapData(data: Buffer): Buffer {
   const lengthBuffer = Buffer.alloc(4);
   lengthBuffer.writeUInt32BE(data.length, 0);
-  const md5Buffer = Buffer.from(md5(data), "hex");
-  return Buffer.concat([lengthBuffer, md5Buffer, data]);
+  const md5Buffer = Buffer.from(md5(new Uint8Array(data)), "hex");
+  return concatBuffers([lengthBuffer, md5Buffer, data]);
+}
+
+/** Wrapped payload overhead: 4-byte length + 16-byte md5. */
+export const WRAP_OVERHEAD = 20;
+
+/**
+ * Choose a dataSize so wrapped data lands in exactly `frameCount` data chunks.
+ * Fountain frames may still appear in the display loop from dataToFrames.
+ */
+export function dataSizeForFrameCount(
+  dataOrStr: Buffer | string,
+  frameCount: number
+): number {
+  if (!Number.isInteger(frameCount) || frameCount < 1) {
+    throw new Error("frameCount must be an integer >= 1");
+  }
+  const wrappedLength = toBuffer(dataOrStr).length + WRAP_OVERHEAD;
+  return Math.ceil(wrappedLength / frameCount);
+}
+
+/**
+ * Max binary length of any exported frame (pre-base64) for a given dataSize.
+ * Data frames are 5 + dataSize; fountain frames are at most dataSize + FOUNTAIN_HEADROOM.
+ */
+export function maxFrameBinaryLength(dataSize: number): number {
+  return Math.max(5 + dataSize, dataSize + FOUNTAIN_HEADROOM);
+}
+
+/**
+ * Simple robust-soliton-inspired degree: mostly 2–3, occasionally higher, hard-capped.
+ */
+function fountainDegree(n: number, random: () => number): number {
+  const maxK = Math.min(n, MAX_FOUNTAIN_DEGREE);
+  if (maxK <= 1) return 1;
+  const r = random();
+  if (r < 0.5) return Math.min(2, maxK);
+  if (r < 0.8) return Math.min(3, maxK);
+  if (r < 0.95) return Math.min(4, maxK);
+  return maxK;
+}
+
+function pickDistinctIndexes(
+  n: number,
+  k: number,
+  random: () => number
+): number[] {
+  const picks: number[] = [];
+  const used = new Set<number>();
+  while (picks.length < k) {
+    const i = Math.floor(random() * n);
+    if (!used.has(i)) {
+      used.add(i);
+      picks.push(i);
+    }
+  }
+  return picks.sort((a, b) => a - b);
 }
 
 /**
@@ -74,24 +135,21 @@ function makeLoop(
 ): string[] {
   const nonce = index % MAX_NONCE;
   const dataChunks = cutAndPad(wrappedData, dataSize);
-  const fountains = [];
+  const fountains: string[] = [];
   if (dataChunks.length > 2) {
-    // TODO optimal number fcount and k still need to be determined
-    const fcount = Math.floor(dataChunks.length / 6);
-    const k = Math.ceil(dataChunks.length / 2);
+    const fcount = Math.max(1, Math.floor(dataChunks.length / 6));
     for (let i = 0; i < fcount; i++) {
-      const distribution = Array(dataChunks.length)
-        .fill(null)
-        .map((_, i) => ({ i, n: random() }))
-        .sort((a, b) => a.n - b.n)
-        .slice(0, k)
-        .map((o) => o.i);
+      const k = fountainDegree(dataChunks.length, random);
+      const distribution = pickDistinctIndexes(dataChunks.length, k, random);
       fountains.push(makeFountainFrame(dataChunks, distribution));
     }
   }
-  const result = [];
+  const result: string[] = [];
   let j = 0;
-  const fountainEach = Math.floor(dataChunks.length / fountains.length);
+  const fountainEach =
+    fountains.length > 0
+      ? Math.max(1, Math.floor(dataChunks.length / fountains.length))
+      : 0;
   for (let i = 0; i < dataChunks.length; i++) {
     result.push(
       makeDataFrame({
@@ -101,7 +159,7 @@ function makeLoop(
         frameIndex: i,
       })
     );
-    if (i % fountainEach === 0 && fountains[j]) {
+    if (fountainEach > 0 && i % fountainEach === 0 && fountains[j]) {
       result.push(fountains[j++]);
     }
   }
@@ -126,7 +184,7 @@ export function dataToFrames(
     return x - Math.floor(x);
   }
 
-  const wrappedData = wrapData(Buffer.from(dataOrStr));
+  const wrappedData = wrapData(toBuffer(dataOrStr));
 
   let r: string[] = [];
   for (let i = 0; i < loops; i++) {

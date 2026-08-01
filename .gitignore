@@ -9,6 +9,8 @@ node_modules/
 # build
 /lib
 /lib-es
+examples/*/dist
+examples/*/node_modules
 
 # misc
 .DS_Store
