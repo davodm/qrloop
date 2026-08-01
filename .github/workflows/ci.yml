@@ -1,24 +1,25 @@
 name: Test
 
-on: [push]
+on:
+  push:
+  pull_request:
 
 jobs:
   test:
     runs-on: ubuntu-latest
     name: Test
     steps:
-      - uses: actions/checkout@v3
-      - uses: pnpm/action-setup@v2
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          version: latest
-      - uses: actions/setup-node@v3
-        with:
-          node-version: 16
+          node-version: 20
           cache: yarn
-          cache-dependency-path: "**/yarn.lock"
+          cache-dependency-path: yarn.lock
       - name: Install dependencies
-        run: yarn
-      - name: run tests
+        run: yarn install --frozen-lockfile
+      - name: Build
+        run: yarn build
+      - name: Run tests
         run: yarn test
-      - name: check if diff
-        run: git diff --exit-code || exit 1
+      - name: Check for unintended diffs
+        run: git diff --exit-code

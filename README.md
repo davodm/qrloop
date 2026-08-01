@@ -1,10 +1,10 @@
 # qrloop
 
-Envelop big blob of data into frames that can be displayed in series of QR Codes.
+Envelop a big blob of data into frames that can be displayed as a series of QR codes.
 
-<img src="https://user-images.githubusercontent.com/211411/46581095-0c663300-ca32-11e8-8366-5d4205a6e14f.gif" width="450" valign="top" /> <img src="https://user-images.githubusercontent.com/211411/46581275-1db13e80-ca36-11e8-9053-325b75511883.gif" width="400" />
+> Maintained fork of the archived [`gre/qrloop`](https://github.com/gre/qrloop) library. Same wire format (base64 frames + `FOUNTAIN_V1`), with bounded fountain degrees so large payloads stay phone-scannable.
 
-> NB. this library is generic enough to not even be used with QR Codes but still take optimization decision in regard to how QR code works and from empirical tests.
+> NB. this library is generic enough to not even be used with QR Codes but still take optimization decisions with regard to how QR codes work and from empirical tests.
 
 ## Install
 
@@ -23,100 +23,118 @@ yarn add buffer   # required
 
 ## API
 
-There are 2 parts of the library, the "exporter" that want to export the data via QR codes and the "importer" that will scan these QR codes and accumulate the frames until it reaches the final result.
+There are 2 parts of the library: the **exporter** that encodes data into QR frames, and the **importer** that scans those QR codes and accumulates frames until it reaches the final result.
 
 ### exporter
 
-The exporter only have 1 function to use: `dataToFrames`.
+Main entry point: `dataToFrames`.
 
 ```js
-import { dataToFrames } from "qrloop";
+import { dataToFrames, dataSizeForFrameCount } from "qrloop";
 
-// examples
-const frames: string[] = dataToFrames("hello world");
-const frames = dataToFrames(Buffer.from([ 0x00, 0x01, ... ]));
-const frames = dataToFrames(data, 140, 2);
+const frames = dataToFrames("hello world");
+const framesFromBytes = dataToFrames(Buffer.from([0x00, 0x01]));
+const framesTuned = dataToFrames(data, 140, 2);
 
-// dataToFrames( data[, dataSize, loops ])
-// data: the complete data to encode in a series of QR code frames
-// dataSize: the number of bytes to use from data for each frame
-// loops: (>= 1) the total number of loops to repeat the frames with and with varying nonce and fountain codes frames. More there is loop, better the chance to not be stuck on a frame.
+// Aim for about N data chunks (fountain frames may still appear in the loop):
+const dataSize = dataSizeForFrameCount(data, 6);
+const exactish = dataToFrames(data, dataSize, 1);
 ```
 
-You can find an implementation example in [`examples/web-text-exporter`](examples/web-text-exporter).
+```
+dataToFrames(data[, dataSize, loops])
+// data: Buffer | string — complete payload
+// dataSize: bytes of payload per data frame (default 120; 100–200 works best on phones)
+// loops: (>= 1) repeat with varying nonce + fountain frames
+```
+
+Examples:
+
+- [`examples/web-exporter`](examples/web-exporter) — text or **binary file** → looping QR stream (Vite)
 
 ### importer
 
-There are a few functions you can use to be able to consume and accumulate the frames over time.
-
-The main function is `parseFramesReducer` that you feed with each QR Code data and will accumulate a state. Consider that state a black box and prefer using the utility functions to extract out information.
+Feed each scanned QR string into `parseFramesReducer` and read progress with the helpers:
 
 ```js
 import {
   parseFramesReducer,
   areFramesComplete,
   framesToData,
-  progressOfFrames
+  progressOfFrames,
+  indexesOfFrames,
+  missingIndexesOfFrames,
 } from "qrloop";
-
-const onResult = finalResult => console.log({ finalResult });
 
 let frames = null;
 
-const onBarCodeScanned = (data: string) => {
+const onBarCodeScanned = (data) => {
   try {
     frames = parseFramesReducer(frames, data);
     if (areFramesComplete(frames)) {
-      onResult(framesToData(frames).toString());
+      console.log(framesToData(frames).toString());
     } else {
       console.log("Progress:", progressOfFrames(frames));
+      console.log("Have:", indexesOfFrames(frames));
+      console.log("Missing:", missingIndexesOfFrames(frames));
     }
   } catch (e) {
-    console.warn(e); // a qrcode might fail. maybe the data is corrupted or you scan something that is not relevant.
+    console.warn(e);
   }
 };
 ```
 
-You can find an implementation example in [`examples/rn-text-importer`](examples/rn-text-importer).
+Examples:
+
+- [`examples/web-importer`](examples/web-importer) — browser camera importer (`BarcodeDetector` + jsQR fallback)
+
+Bring your own React Native / native scanner and call the same importer API.
 
 ## Trade-offs
 
-### You do not need this if...
+### You do not need this if…
 
-- You do not need this if your data can always fit in one big QR Code (check QR limits and test on phones).
-- You do not need this if you have network condition and don't have privacy constraints and can afford storing the data on a server and just have a token to get it. You can also maybe use encrypted data, but beware decryption keys could leak!
+- Your data always fits in one QR code (check QR limits and test on phones).
+- You have network access, no privacy constraint, and can store the blob on a server behind a token.
 
-### finding the correct QRCode dataSize
+### Finding the correct QRCode `dataSize`
 
-To find a good QRCode data size, we want to optimize the data we can put in each frame but we must not have a too big QR Code otherwise phones would have issues scanning it.
+Empirical tests found **100–200 bytes/frame** works best. Above ~200, phone scan reliability drops. Very small frames (<50) are not meaningfully easier than ~150.
 
-Empirical tests has shown that data size between 100-200 are the best and that after 200 threshold, the ability for phones starts to decline. A counter-intuitive result we have found is that QR Code with really few data in it (like below 50 bytes) are not easier to read than just 150 bytes and sometimes are even slower to read!
+### Troubleshooting frames not getting caught
 
-We have run an internal benchmark on various phones and get this result:
+This is a unidirectional stream: the emitter loops until the reader has everything. Last frames are statistically hardest.
 
-<img src="https://user-images.githubusercontent.com/211411/46581570-0c1e6580-ca3b-11e8-962a-7156dd7e9202.png">
-
-### troubleshooting frames not getting caught
-
-Since this is an unidirectional data stream, we can't tell the emitter to slow down or inform it what are the missing frames. Therefore, the emitter can just loop over all the frames until they are all parsed.
-
-Statistically, this means the phone will catch many frames at the beginning and it will get harder and harder to catch the last frame. Statistically, the phone will eventually get all the frames but it can be a frustrating experience to be stuck with one last missing frame.
-
-To troubleshoot this, you can try different FPS speed. Experience have shown phones are able to scan about 30 frames per second (depends on implementations) but in practice it's better to be at max 5 fps.
-
-We also have empirically found that some frames are randomly harder for phone to catch. Therefore, we have in this library a concept of "replicas" which basically replicates frames with a nonce: one byte in the QR Code data completely change the qrcode, increasing our chance of falling on an "easy" frame.
-
-Finally, we have implemented "fountain codes" inspired from [Luby transform code](https://en.wikipedia.org/wiki/Luby_transform_code) that allows to recover frames faster.
+- Cap display rate around **5 fps** (phones can sample faster, but slower loops catch more).
+- Use `loops > 1` for nonce “replicas” that reshape hard-to-read QR patterns.
+- Fountain frames (Luby-inspired XOR) recover missing pieces faster. In 1.5.0+, fountain degree is **bounded** so frames stay within a scannable size even for large payloads.
 
 ### base64 on each frame
 
-Even though we can technically put binary data in QR Code, some reader implementation does not support this properly (for instance on iOS unless relying on undocumented hack https://stackoverflow.com/questions/32429480/read-binary-qr-code-with-avfoundation ). We have therefore chosen to convert frames to base64 (because built in Buffer). The overhead is acceptable.
+Binary QR payloads are still awkward on iOS AVFoundation (`stringValue` is the reliable path; raw bytes need `CIQRCodeDescriptor` bitstream parsing). Android can expose raw bytes, but cross-platform scanners and the web `BarcodeDetector` are string-oriented. **Base64 remains the default wire format** for interoperability. The overhead is acceptable.
 
-### Data validation using a checksum
+### Data validation
 
-On top of QRCode built-in checksums, we have a data length check and md5 checksum validation over the data to make sure some frame are not corrupted. The library is also able to recover from any possible frame corruption state (if you continue scanning, it should eventually correct).
+On top of QR ECC, each payload is wrapped with length + MD5. Continued scanning can recover from corrupted intermediate state.
 
 ### Encoding complex objects
 
-To encode complex objects like JavaScript objects over the data, you can just use `JSON.stringify`.
-Since the result of `JSON.stringify` is not really optimized, you can then compress it using any compression algorithm like GZIP or `node-lzw` (my preferred because concise).
+`JSON.stringify`, optionally compressed (gzip, LZW, etc.), then `dataToFrames`.
+
+## Development
+
+```bash
+yarn
+yarn test
+yarn build
+```
+
+Node 18+ (CI uses Node 20).
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
+
+## License
+
+MIT — original work by Gaëtan Renaudeau; maintained fork contributions under the same license.

@@ -1,6 +1,6 @@
 import md5 from "md5";
 import { Buffer } from "buffer";
-import { xor } from "./Buffer";
+import { xor, concatBuffers } from "./Buffer";
 import { MAX_NONCE, FOUNTAIN_V1 } from "./constants";
 
 type Frame = {
@@ -65,16 +65,11 @@ function resolveFountains(state: State): State {
       fountainsQueue.splice(i, 1);
     } else if (missing.length === 0) {
       // fountain useless, simply eat it and continue on same index
-      // TODO we could assert the data is equal to xor to do a checksum. not sure to do if does not match
       fountainsQueue.splice(i, 1);
     } else if (missing.length === 1) {
       // found a frame to recover. rebuild it
       const [index] = missing;
       const recoveredData = xor(existingFramesData.concat([fountain.data]));
-      const head = Buffer.alloc(5);
-      head.writeUInt8(0, 0);
-      head.writeUInt16BE(framesCount, 1);
-      head.writeUInt16BE(index, 3);
       const frame = {
         index,
         framesCount,
@@ -105,7 +100,7 @@ function resolveFountains(state: State): State {
 export function parseFramesReducer(_state: State, chunkStr: string): State {
   const state = _state || initialState;
   const chunk = Buffer.from(chunkStr, "base64");
-  const head = chunk.slice(0, 5);
+  const head = chunk.subarray(0, 5);
   const version = head.readUInt8(0);
 
   if (version === FOUNTAIN_V1) {
@@ -116,7 +111,7 @@ export function parseFramesReducer(_state: State, chunkStr: string): State {
     for (let i = 0; i < k; ++i) {
       frameIndexes.push(chunk.readUInt16BE(3 + 2 * i));
     }
-    const data = chunk.slice(3 + 2 * k);
+    const data = chunk.subarray(3 + 2 * k);
     const frames = state.frames;
     const fountain = {
       frameIndexes,
@@ -135,7 +130,7 @@ export function parseFramesReducer(_state: State, chunkStr: string): State {
   }
   const framesCount = head.readUInt16BE(1);
   const index = head.readUInt16BE(3);
-  const data = chunk.slice(5);
+  const data = chunk.subarray(5);
   if (framesCount <= 0) {
     throw new Error("invalid framesCount");
   }
@@ -165,6 +160,28 @@ export const currentNumberOfFrames = (s: State): number =>
   s ? s.frames.length : 0;
 
 /**
+ * Sorted list of data-frame indexes currently captured.
+ */
+export function indexesOfFrames(s: State): number[] {
+  if (!s || s.frames.length === 0) return [];
+  return s.frames.map((f) => f.index).sort((a, b) => a - b);
+}
+
+/**
+ * Sorted list of data-frame indexes still missing.
+ */
+export function missingIndexesOfFrames(s: State): number[] {
+  const total = totalNumberOfFrames(s);
+  if (!total) return [];
+  const have = new Set(indexesOfFrames(s));
+  const missing: number[] = [];
+  for (let i = 0; i < total; i++) {
+    if (!have.has(i)) missing.push(i);
+  }
+  return missing;
+}
+
+/**
  * get a progress value from 0 to 1
  */
 export const progressOfFrames = (s: State): number => {
@@ -184,9 +201,9 @@ export const areFramesComplete = (s: State): boolean =>
  */
 export function framesToData(s?: State): Buffer {
   if (!s) {
-    throw new Error("invalid date: frames is undefined");
+    throw new Error("invalid data: frames is undefined");
   }
-  const all = Buffer.concat(
+  const all = concatBuffers(
     s.frames
       .slice(0)
       .sort((a, b) => a.index - b.index)
@@ -194,10 +211,10 @@ export function framesToData(s?: State): Buffer {
   );
 
   const length = all.readUInt32BE(0);
-  const expectedMD5 = all.slice(4, 20).toString("hex");
-  const data = all.slice(20).slice(0, length);
+  const expectedMD5 = all.subarray(4, 20).toString("hex");
+  const data = all.subarray(20).subarray(0, length);
 
-  if (md5(data) !== expectedMD5) {
+  if (md5(new Uint8Array(data)) !== expectedMD5) {
     throw new Error("invalid data: md5 doesn't match");
   }
 
